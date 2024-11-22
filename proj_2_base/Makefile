@@ -17,4 +17,4 @@ usr_functions.o: usr_functions.c usr_functions.h common.h
 	$(CC) $(CFLAGS) -c $*.c
 	
 clean:
-	rm -rf *.o *.a $(TARGET) *.itm result.txt
+	rm -rf *.o *.a $(TARGET) *.itm mr.rst

@@ -71,7 +71,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
             while (read(input_fd, &c, 1) > 0) {
                 adjusted_size++;      
                 // if (c == '.' || c == ',' || c == '!') {  
-                if(c == '\n' | c == '.'){
+                if(c == '\n'){
                     break;
                 }
             }
@@ -149,7 +149,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
         }
     }
 
-    char result_file[] = "result.txt";
+    char result_file[] = "mr.rst";
     int result_fd = open(result_file, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if (result_fd < 0) {
         EXIT_ERROR(ERROR, "Failed to create result file\n");

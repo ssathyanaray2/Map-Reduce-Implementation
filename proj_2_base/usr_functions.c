@@ -7,7 +7,6 @@
 #include "common.h"
 #include "usr_functions.h"
 
-#define BUFFER_SIZE 4096
 
 /* User-defined map function for the "Letter counter" task.  
    This map function is called in a map worker process.
@@ -74,39 +73,36 @@ int letter_counter_map(DATA_SPLIT * split, int fd_out)
 int letter_counter_reduce(int * p_fd_in, int fd_in_num, int fd_out) {
 
     if (p_fd_in == NULL || fd_in_num <= 0 || fd_out < 0) {
-        return -1; // Error handling
+        return -1; 
     }
 
-    int letter_counts[26] = {0}; // For letters A-Z
+    int letter_counts[26] = {0}; 
 
-    // Read from each intermediate file
     for (int i = 0; i < fd_in_num; i++) {
         FILE *file = fdopen(p_fd_in[i], "r");
         if (file == NULL) {
-            return -1; // Error handling
+            return -1; 
         }
 
-        char line[128]; // Buffer for reading each line
+        char line[128]; 
         while (fgets(line, sizeof(line), file)) {
             char letter;
             int count;
 
-            // Parse line in the format "X 123"
             if (sscanf(line, "%c %d", &letter, &count) == 2) {
                 if (letter >= 'A' && letter <= 'Z') {
-                    letter_counts[letter - 'A'] += count; // Aggregate counts
+                    letter_counts[letter - 'A'] += count; 
                 }
             }
         }
 
-        fclose(file); // Close the current intermediate file
+        fclose(file);  
     }
 
-    // Write the aggregated results to the final output file
     for (int i = 0; i < 26; i++) {
         char output[32];
         int len = snprintf(output, sizeof(output), "%c %d\n", 'A' + i, letter_counts[i]);
-        write(fd_out, output, len); // Write to the output file
+        write(fd_out, output, len); 
     }
 
     return 0; 
@@ -122,74 +118,74 @@ int letter_counter_reduce(int * p_fd_in, int fd_in_num, int fd_out) {
  */
 int word_finder_map(DATA_SPLIT * split, int fd_out)
 {   
-    if (!split || split->fd < 0 || split->usr_data == NULL) {
-        return -1; 
+    if (!split || split->fd < 0 || split->size <= 0 || !split->usr_data) {
+        fprintf(stderr, "Invalid data split\n");
+        return -1;
     }
 
-    char *target_word = (char *)split->usr_data; // Target word provided by the user
-    int target_len = strlen(target_word);
+    const char *target_word = (const char *)split->usr_data;  
+    size_t target_len = strlen(target_word);
 
     if (target_len == 0) {
-        return -1; 
+        fprintf(stderr, "Target word is empty\n");
+        return -1;
     }
 
-    char *buffer = malloc(split->size + 1); 
+    char *buffer = malloc(split->size + 1);
     if (!buffer) {
-        return -1; 
+        perror("Failed to allocate memory for the buffer");
+        return -1;
     }
 
-    if (read(split->fd, buffer, split->size) != split->size) {
+    ssize_t bytes_read = read(split->fd, buffer, split->size);
+    if (bytes_read < 0) {
+        perror("Failed to read from input file");
         free(buffer);
-        printf("reading error\n");
-        return -1; 
+        return -1;
     }
 
-    buffer[split->size] = '\0'; 
+    buffer[bytes_read] = '\0';  
 
-    char *line_start = buffer; 
-    char *line_end;
+    char *line = NULL;
+    size_t line_len = 0;
+    char *start = buffer;      
+    char *end = buffer;        
 
-    while ((line_end = strchr(line_start, '.')) != NULL) {
-        *line_end = '\0'; 
+    while (end < buffer + bytes_read) {
 
-        char *match = strstr(line_start, target_word);
-        int found = 0;
-
-        while (match) {
-            // Check for whole word match
-            if ((match == line_start || isspace(*(match - 1))) && // Start of the line or preceded by a space
-                (isspace(*(match + target_len)) || *(match + target_len) == '\0')) { // End of the line or followed by a space
-                found = 1;
-                break;
+        if (*end == '\n' || end == buffer + bytes_read - 1) {
+            if (*end == '\n') {
+                *end = '\0';  
+            } else {
+                end++;  
             }
-            match = strstr(match + 1, target_word); // Search for the next occurrence
-        }
 
-        if (found) {
-            // Write the matching line to the intermediate file
-            dprintf(fd_out, "%s\n", line_start);
-        }
+            line_len = end - start;
+            line = start;
 
-        line_start = line_end + 1; // Move to the start of the next line
-    }
+            char *match = strstr(line, target_word);
+            int found = 0;
 
-    // Handle any remaining data in the buffer after the last newline
-    if (*line_start != '\0') {
-        char *match = strstr(line_start, target_word);
-        int found = 0;
-
-        while (match) {
-            if ((match == line_start || isspace(*(match - 1))) &&
-                (isspace(*(match + target_len)) || *(match + target_len) == '\0')) {
-                found = 1;
-                break;
+            while (match) {
+                if ((match == line || !isalnum(*(match - 1))) &&       
+                    (!isalnum(*(match + target_len)))) {              
+                    found = 1;
+                    break;
+                }
+                match = strstr(match + target_len, target_word);      
             }
-            match = strstr(match + 1, target_word);
-        }
 
-        if (found) {
-            dprintf(fd_out, "%s\n", line_start);
+            if (found) {
+                if (dprintf(fd_out, "%s\n", line) < 0) {
+                    perror("Failed to write to intermediate file");
+                    free(buffer);
+                    return -1;
+                }
+            }
+
+            start = end + 1;
         }
+        end++;
     }
 
     free(buffer);
@@ -210,52 +206,37 @@ int word_finder_map(DATA_SPLIT * split, int fd_out)
 */
 int word_finder_reduce(int * p_fd_in, int fd_in_num, int fd_out)
 {
-    char buffer[1024];  // Buffer to read intermediate files
-    int bytes_read;
-    char *line;  // Pointer to each line of content
-    size_t line_len = 0;
-
-    // Use a set or map to avoid duplicate lines in the output
-    // For simplicity, we use a static array here.
-    // In a real-world scenario, a hash table or set should be used to efficiently detect duplicates.
-    char *seen_lines[1024];  // Array to store seen lines
-    int seen_count = 0;  // To keep track of number of unique lines seen
-
-    // Process each intermediate file
-    for (int i = 0; i < fd_in_num; i++) {
-        lseek(p_fd_in[i], 0, SEEK_SET);  // Set each file descriptor to the beginning
-
-        // Read the intermediate file in chunks
-        while ((bytes_read = read(p_fd_in[i], buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytes_read] = '\0';  // Null-terminate the buffer
-
-            // Split the buffer into lines
-            line = strtok(buffer, "\n");
-            while (line != NULL) {
-                // Check if this line has been seen already
-                int is_duplicate = 0;
-                for (int j = 0; j < seen_count; j++) {
-                    if (strcmp(seen_lines[j], line) == 0) {
-                        is_duplicate = 1;  // Line already exists in the result
-                        break;
-                    }
-                }
-
-                // If not a duplicate, write the line to the output file
-                if (!is_duplicate) {
-                    write(fd_out, line, strlen(line));  // Write the line to result file
-                    write(fd_out, "\n", 1);  // Add newline after the line
-                    seen_lines[seen_count++] = line;  // Mark this line as seen
-                }
-
-                // Move to the next line
-                line = strtok(NULL, "\n");
-            }
-        }
+    if (!p_fd_in || fd_in_num <= 0 || fd_out < 0) {
+        fprintf(stderr, "Invalid arguments passed to reduce function.\n");
+        return -1;
     }
 
-    return 0;
+    char *line = NULL;
+    size_t line_capacity = 0;
+    ssize_t line_len;
 
+    for (int i = 0; i < fd_in_num; i++) {
+        FILE *file_in = fdopen(p_fd_in[i], "r");
+        if (!file_in) {
+            perror("Failed to open intermediate file");
+            return -1;
+        }
+
+        while ((line_len = getline(&line, &line_capacity, file_in)) != -1) {
+            if (write(fd_out, line, line_len) == -1) {
+                perror("Failed to write to result file");
+                fclose(file_in);
+                free(line);
+                return -1;
+            }
+        }
+
+        fclose(file_in);
+    }
+
+    free(line);
+
+    return 0;
 }
 
 
