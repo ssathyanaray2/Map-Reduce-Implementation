@@ -19,7 +19,7 @@
  */
 int letter_counter_map(DATA_SPLIT * split, int fd_out)
 {
-    if (!split || split->fd < 0 || split->size <= 0 || fd_out < 0) {
+    if (!split || split->fd < 0 || fd_out < 0) {
         return -1;
     }
     char *buffer = (char *)malloc(split->size);
@@ -104,11 +104,9 @@ int letter_counter_reduce(int * p_fd_in, int fd_in_num, int fd_out) {
 
     // Write the aggregated results to the final output file
     for (int i = 0; i < 26; i++) {
-        if (letter_counts[i] > 0) {
-            char output[32];
-            int len = snprintf(output, sizeof(output), "%c %d\n", 'A' + i, letter_counts[i]);
-            write(fd_out, output, len); // Write to the output file
-        }
+        char output[32];
+        int len = snprintf(output, sizeof(output), "%c %d\n", 'A' + i, letter_counts[i]);
+        write(fd_out, output, len); // Write to the output file
     }
 
     return 0; 
@@ -124,58 +122,74 @@ int letter_counter_reduce(int * p_fd_in, int fd_in_num, int fd_out) {
  */
 int word_finder_map(DATA_SPLIT * split, int fd_out)
 {   
-    if (!split || !split->usr_data || split->size <= 0) {
-        fprintf(stderr, "Invalid input to word_finder_map\n");
-        return -1;
+    if (!split || split->fd < 0 || split->usr_data == NULL) {
+        return -1; 
     }
 
-    const char *word = (const char *)split->usr_data;  // The word to find
-    size_t word_len = strlen(word);  // Length of the word
-    if (word_len == 0) {
-        fprintf(stderr, "Empty word to search for\n");
-        return -1;
+    char *target_word = (char *)split->usr_data; // Target word provided by the user
+    int target_len = strlen(target_word);
+
+    if (target_len == 0) {
+        return -1; 
     }
 
-    char *buffer = malloc(split->size + word_len);  // Allocate a buffer for the split size + extra for boundary handling
+    char *buffer = malloc(split->size + 1); 
     if (!buffer) {
-        perror("Failed to allocate memory");
-        return -1;
+        return -1; 
     }
 
-    // Read the data split from the file descriptor
-    ssize_t bytes_read = read(split->fd, buffer, split->size);
-    if (bytes_read < 0) {
-        perror("Failed to read from input file descriptor");
+    if (read(split->fd, buffer, split->size) != split->size) {
         free(buffer);
-        return -1;
+        printf("reading error\n");
+        return -1; 
     }
 
-    // Handle boundary overlap by reading the extra bytes (if available)
-    ssize_t extra_bytes = read(split->fd, buffer + bytes_read, word_len - 1);
-    if (extra_bytes > 0) {
-        bytes_read += extra_bytes;
-    }
+    buffer[split->size] = '\0'; 
 
-    // Null-terminate the buffer for safety
-    buffer[bytes_read] = '\0';
+    char *line_start = buffer; 
+    char *line_end;
 
-    // Search for the word in the buffer
-    size_t position = 0;  // Position within the current split
-    int matches_found = 0;
+    while ((line_end = strchr(line_start, '.')) != NULL) {
+        *line_end = '\0'; 
 
-    for (char *ptr = buffer; (ptr = strstr(ptr, word)) != NULL; ptr++) {
-        position = ptr - buffer;
+        char *match = strstr(line_start, target_word);
+        int found = 0;
 
-        // Write the position to the output file
-        char output[64];
-        int output_len = snprintf(output, sizeof(output), "Position: %zu\n", position);
-        if (write(fd_out, output, output_len) < 0) {
-            perror("Failed to write to intermediate file");
-            free(buffer);
-            return -1;
+        while (match) {
+            // Check for whole word match
+            if ((match == line_start || isspace(*(match - 1))) && // Start of the line or preceded by a space
+                (isspace(*(match + target_len)) || *(match + target_len) == '\0')) { // End of the line or followed by a space
+                found = 1;
+                break;
+            }
+            match = strstr(match + 1, target_word); // Search for the next occurrence
         }
 
-        matches_found++;
+        if (found) {
+            // Write the matching line to the intermediate file
+            dprintf(fd_out, "%s\n", line_start);
+        }
+
+        line_start = line_end + 1; // Move to the start of the next line
+    }
+
+    // Handle any remaining data in the buffer after the last newline
+    if (*line_start != '\0') {
+        char *match = strstr(line_start, target_word);
+        int found = 0;
+
+        while (match) {
+            if ((match == line_start || isspace(*(match - 1))) &&
+                (isspace(*(match + target_len)) || *(match + target_len) == '\0')) {
+                found = 1;
+                break;
+            }
+            match = strstr(match + 1, target_word);
+        }
+
+        if (found) {
+            dprintf(fd_out, "%s\n", line_start);
+        }
     }
 
     free(buffer);
@@ -196,72 +210,50 @@ int word_finder_map(DATA_SPLIT * split, int fd_out)
 */
 int word_finder_reduce(int * p_fd_in, int fd_in_num, int fd_out)
 {
-    if (!p_fd_in || fd_in_num <= 0 || fd_out < 0) {
-        fprintf(stderr, "Invalid input to word_finder_reduce\n");
-        return -1;
-    }
+    char buffer[1024];  // Buffer to read intermediate files
+    int bytes_read;
+    char *line;  // Pointer to each line of content
+    size_t line_len = 0;
 
-    // Buffer to hold positions from all intermediate files
-    size_t positions_size = 1024;
-    size_t positions_count = 0;
-    size_t *positions = malloc(positions_size * sizeof(size_t));
-    if (!positions) {
-        perror("Failed to allocate memory for positions");
-        return -1;
-    }
+    // Use a set or map to avoid duplicate lines in the output
+    // For simplicity, we use a static array here.
+    // In a real-world scenario, a hash table or set should be used to efficiently detect duplicates.
+    char *seen_lines[1024];  // Array to store seen lines
+    int seen_count = 0;  // To keep track of number of unique lines seen
 
-    // Read and aggregate positions from intermediate files
+    // Process each intermediate file
     for (int i = 0; i < fd_in_num; i++) {
-        char buffer[256];
-        ssize_t bytes_read;
+        lseek(p_fd_in[i], 0, SEEK_SET);  // Set each file descriptor to the beginning
 
+        // Read the intermediate file in chunks
         while ((bytes_read = read(p_fd_in[i], buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytes_read] = '\0'; // Null-terminate the buffer
+            buffer[bytes_read] = '\0';  // Null-terminate the buffer
 
-            // Parse the buffer line by line
-            char *line = strtok(buffer, "\n");
+            // Split the buffer into lines
+            line = strtok(buffer, "\n");
             while (line != NULL) {
-                size_t position;
-                if (sscanf(line, "Position: %zu", &position) == 1) {
-                    // Store the position
-                    if (positions_count >= positions_size) {
-                        positions_size *= 2;
-                        size_t *new_positions = realloc(positions, positions_size * sizeof(size_t));
-                        if (!new_positions) {
-                            free(positions);
-                            perror("Failed to reallocate memory for positions");
-                            return -1;
-                        }
-                        positions = new_positions;
+                // Check if this line has been seen already
+                int is_duplicate = 0;
+                for (int j = 0; j < seen_count; j++) {
+                    if (strcmp(seen_lines[j], line) == 0) {
+                        is_duplicate = 1;  // Line already exists in the result
+                        break;
                     }
-                    positions[positions_count++] = position;
                 }
+
+                // If not a duplicate, write the line to the output file
+                if (!is_duplicate) {
+                    write(fd_out, line, strlen(line));  // Write the line to result file
+                    write(fd_out, "\n", 1);  // Add newline after the line
+                    seen_lines[seen_count++] = line;  // Mark this line as seen
+                }
+
+                // Move to the next line
                 line = strtok(NULL, "\n");
             }
         }
-
-        if (bytes_read < 0) {
-            perror("Failed to read from intermediate file");
-            free(positions);
-            return -1;
-        }
     }
 
-    // Sort the positions (if needed)
-    qsort(positions, positions_count, sizeof(size_t), (int (*)(const void *, const void *))strcmp);
-
-    // Write the final result to the output file
-    for (size_t i = 0; i < positions_count; i++) {
-        char output[64];
-        int output_len = snprintf(output, sizeof(output), "Position: %zu\n", positions[i]);
-        if (write(fd_out, output, output_len) < 0) {
-            perror("Failed to write to result file");
-            free(positions);
-            return -1;
-        }
-    }
-
-    free(positions);
     return 0;
 
 }

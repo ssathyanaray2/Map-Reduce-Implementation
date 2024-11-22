@@ -50,12 +50,16 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
     
     gettimeofday(&start, NULL);
 
-    // printf("file size %d\n", file_size);
+    printf("file size %d\n", file_size);
 
     int split_size = file_size / split_num;
+    // printf("split_size %d\n", split_size);
     int current_offset = 0;
+    int current_offset_array[split_num];
+    int adjusted_size_array[split_num];
 
-    for (int i = 0; i < split_num; i++){
+    for (int i=0; i<split_num; i++){
+        
         // printf("split_num %d\n", i);
         // printf("current_offset %d\n", current_offset);
         int adjusted_size = split_size;
@@ -66,15 +70,32 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
             char c;
             while (read(input_fd, &c, 1) > 0) {
                 adjusted_size++;      
-                // current_offset++;
-                if (c == ' ' || c == '\n') {  
+                // if (c == '.' || c == ',' || c == '!') {  
+                if(c == '\n' | c == '.'){
                     break;
                 }
             }
         } else {
             adjusted_size = file_size - current_offset;
+            if (adjusted_size < 0 ) {
+                adjusted_size = 0;
+            }
         }
+
+        current_offset_array[i] = current_offset;
+        adjusted_size_array[i] = adjusted_size;
+
+        // printf("adjusted size %d\n", adjusted_size);
         // printf("adjusted size + current offset %d\n", current_offset+adjusted_size);
+        current_offset += adjusted_size;
+
+    }
+
+    for (int i = 0; i < split_num; i++){
+        printf("%d %d %d\n", current_offset_array[i], adjusted_size_array[i], current_offset_array[i]+adjusted_size_array[i] );
+    }
+
+    for (int i = 0; i < split_num; i++){
 
         pid_t pid = fork();
         if (pid < 0) {
@@ -90,11 +111,11 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
             }
 
             int worker_fd = dup(input_fd); 
-            lseek(worker_fd, current_offset, SEEK_SET);
+            lseek(worker_fd, current_offset_array[i], SEEK_SET);
 
             DATA_SPLIT split = {
                 .fd = worker_fd,
-                .size = adjusted_size,
+                .size = adjusted_size_array[i],
                 .usr_data = spec->usr_data
             };
 
@@ -104,24 +125,19 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
 
             close(fd_out);
             close(worker_fd);
-            current_offset += adjusted_size;
             exit(0);
 
         }
         else{
+
             result->map_worker_pid[i] = pid;
-        }
-        
+            int status;
+            waitpid(result->map_worker_pid[i], &status, 0);
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+                close(input_fd);
+                EXIT_ERROR(ERROR, "Map worker process failed\n");
 
-    }
-
-    close(input_fd);
-
-    for (int i = 0; i < split_num; i++) {
-        int status;
-        waitpid(result->map_worker_pid[i], &status, 0);
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-            EXIT_ERROR(ERROR, "Map worker process failed\n");
+            }
         }
     }
 
@@ -164,6 +180,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
         EXIT_ERROR(ERROR, "Reduce worker process failed\n");
     }
 
+    close(input_fd);
     close(result_fd);
 
     result->filepath = strdup(result_file);
