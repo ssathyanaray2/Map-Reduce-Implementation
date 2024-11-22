@@ -12,7 +12,7 @@
 void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
 {
     if (spec == NULL || result == NULL || spec->split_num <= 0 || spec->input_data_filepath == NULL) {
-        EXIT_ERROR(ERROR, "Invalid specification or result structure\n");
+        EXIT_ERROR(ERROR, "Invalid specifications\n");
     }
 
     int input_fd = open(spec->input_data_filepath, O_RDONLY);
@@ -50,7 +50,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
     
     gettimeofday(&start, NULL);
 
-    printf("file size %d\n", file_size);
+    // printf("file size %d\n", file_size);
 
     int split_size = file_size / split_num;
     // printf("split_size %d\n", split_size);
@@ -91,9 +91,9 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
 
     }
 
-    for (int i = 0; i < split_num; i++){
-        printf("%d %d %d\n", current_offset_array[i], adjusted_size_array[i], current_offset_array[i]+adjusted_size_array[i] );
-    }
+    // for (int i = 0; i < split_num; i++){
+    //     printf("%d %d %d\n", current_offset_array[i], adjusted_size_array[i], current_offset_array[i]+adjusted_size_array[i] );
+    // }
 
     for (int i = 0; i < split_num; i++){
 
