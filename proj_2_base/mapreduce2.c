@@ -55,7 +55,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
     
     gettimeofday(&start, NULL);
 
-    // printf("file size %d\n", file_size);
+    printf("file size %d\n", file_size);
 
     int split_size = file_size / split_num;
     // printf("split_size %d\n", split_size);
@@ -76,7 +76,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
             while (read(input_fd, &c, 1) > 0) {
                 adjusted_size++;      
                 // if (c == '.' || c == ',' || c == '!') {  
-                if(c == '\n' | c == '.'){
+                if(c == '\n'){
                     break;
                 }
             }
@@ -96,9 +96,9 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
 
     }
 
-    // for (int i = 0; i < split_num; i++){
-    //     printf("%d %d %d\n", current_offset_array[i], adjusted_size_array[i], current_offset_array[i]+adjusted_size_array[i] );
-    // }
+    for (int i = 0; i < split_num; i++){
+        printf("%d %d %d\n", current_offset_array[i], adjusted_size_array[i], current_offset_array[i]+adjusted_size_array[i] );
+    }
 
     for (int i = 0; i < split_num; i++){
 
@@ -109,6 +109,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
         }
 
         if (pid == 0) {  
+            
             int fd_out = open(intermediate_files[i], O_CREAT | O_WRONLY | O_TRUNC, 0666);
 
             if (fd_out < 0) {
@@ -130,6 +131,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
 
             close(fd_out);
             close(worker_fd);
+
             if(i==0){
 
                 char signal;
@@ -143,7 +145,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
                     }
                 }
 
-                char result_file[] = "result.txt";
+                char result_file[] = "mr.rst";
                 int result_fd = open(result_file, O_CREAT | O_WRONLY | O_TRUNC, 0666);
                 if (result_fd < 0) {
                     EXIT_ERROR(ERROR, "Failed to create result file\n");
@@ -153,8 +155,6 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
                     EXIT_ERROR(ERROR, "Reduce function failed\n");
                 }
 
-                // printf("reduce worker pid %d\n", getpid());
-                result->reduce_worker_pid = getpid();
                 result->filepath = strdup(result_file);
 
                 for (int i = 0; i < split_num; i++) {
@@ -162,6 +162,9 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
                 }
 
                 close(result_fd);
+                result->reduce_worker_pid = getpid();
+                printf("reduce worker pid %d\n", result->reduce_worker_pid);
+
             }
 
             exit(0);
@@ -172,6 +175,7 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
             if (i!=0){
                 int status;
                 waitpid(result->map_worker_pid[i], &status, 0);
+                printf("map process %d exited.\n", i);
                 if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
                     close(input_fd);
                     EXIT_ERROR(ERROR, "Map worker process failed\n");
@@ -184,13 +188,15 @@ void mapreduce(MAPREDUCE_SPEC * spec, MAPREDUCE_RESULT * result)
     char signal = 'R';
     write(pipe_fd[1], &signal, 1); 
 
-    // printf("map 0 worker pid %d\n", result->map_worker_pid[0]);
     int status;
     waitpid(result->map_worker_pid[0], &status, 0);
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         close(input_fd);
         EXIT_ERROR(ERROR, "Reduce process failed\n");
     }
+    result->reduce_worker_pid = result->map_worker_pid[0];
+    printf("map 0 worker pid %d\n", result->reduce_worker_pid);
+
 
     close(pipe_fd[0]);
     close(pipe_fd[1]);

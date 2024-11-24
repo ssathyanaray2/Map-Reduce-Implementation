@@ -118,7 +118,7 @@ int letter_counter_reduce(int * p_fd_in, int fd_in_num, int fd_out) {
  */
 int word_finder_map(DATA_SPLIT * split, int fd_out)
 {   
-    if (!split || split->fd < 0 || split->size <= 0 || !split->usr_data) {
+    if (!split || split->fd < 0 || !split->usr_data) {
         fprintf(stderr, "Invalid data split\n");
         return -1;
     }
@@ -147,7 +147,6 @@ int word_finder_map(DATA_SPLIT * split, int fd_out)
     buffer[bytes_read] = '\0';  
 
     char *line = NULL;
-    size_t line_len = 0;
     char *start = buffer;      
     char *end = buffer;        
 
@@ -160,7 +159,6 @@ int word_finder_map(DATA_SPLIT * split, int fd_out)
                 end++;  
             }
 
-            line_len = end - start;
             line = start;
 
             char *match = strstr(line, target_word);
